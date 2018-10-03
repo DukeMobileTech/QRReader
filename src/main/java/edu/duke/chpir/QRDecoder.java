@@ -3,24 +3,25 @@ package edu.duke.chpir;
 import com.google.zxing.*;
 import com.google.zxing.client.j2se.BufferedImageLuminanceSource;
 import com.google.zxing.common.HybridBinarizer;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 
 import javax.imageio.ImageIO;
+import java.awt.geom.AffineTransform;
+import java.awt.image.AffineTransformOp;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.util.*;
+import java.util.List;
 
 public class QRDecoder {
     private static final String DELIMITER = ",";
     private static final String SEPARATOR = "\n";
     private static final String HEADER = "PDF_Name,Page_Number,Decoded_ID";
-    public static final int DIMENSION = 200;
-    public static final int X = 150;
-    public static final int Y = 50;
+    private static final double FACTOR_HALF = 0.5;
+    private static final int FACTOR_DOUBLE = 2;
 
     private static BinaryBitmap getBinaryBitmap(BufferedImage image) {
         LuminanceSource source = new BufferedImageLuminanceSource(image);
@@ -45,39 +46,41 @@ public class QRDecoder {
         return image;
     }
 
-    private static String decodeQRCode(File qrCodeImage) {
+    private static String decodeScaled(File qrCodeImage, double factor) {
         String returnValue = "";
-        BufferedImage bufferedQRCodeImage = getBufferedImage(qrCodeImage);
-        BinaryBitmap bitmap = getBinaryBitmap(bufferedQRCodeImage);
+        BufferedImage before = getBufferedImage(qrCodeImage);
+        int width = before.getWidth(), height = before.getHeight();
+        BufferedImage after = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        AffineTransform affineTransform = new AffineTransform();
+        affineTransform.scale(factor, factor);
+        AffineTransformOp scaleOp = new AffineTransformOp(affineTransform, AffineTransformOp.TYPE_BILINEAR);
+        after = scaleOp.filter(before, after);
+        BinaryBitmap bitmap = getBinaryBitmap(after);
         try {
-            Result result = new MultiFormatReader().decode(bitmap);
-            returnValue = result.getText();
+            returnValue = getQRText(bitmap);
         } catch (NotFoundException e) {
-            int width = DIMENSION, height = DIMENSION;
-            int xOrigin = X, yOrigin = Y;
-            if (bufferedQRCodeImage.getWidth() < DIMENSION + X || bufferedQRCodeImage.getHeight() < DIMENSION + Y) {
-                width = bufferedQRCodeImage.getWidth();
-                height = bufferedQRCodeImage.getHeight();
-                xOrigin = 0;
-                yOrigin = 0;
-            }
-            BufferedImage croppedImage = bufferedQRCodeImage.getSubimage(xOrigin, yOrigin, width, height);
-            File croppedDir = createDirectory(qrCodeImage.getAbsolutePath().replace(".png", ""));
-            File outputFile = new File(croppedDir.getAbsolutePath() + "/" + "QUADRANT_ONE" + ".png");
-            BinaryBitmap croppedBitmap = getBinaryBitmap(croppedImage);
-            try {
-                ImageIO.write(croppedImage, "png", outputFile);
-                Result result = new MultiFormatReader().decode(croppedBitmap);
-                returnValue = result.getText();
-            } catch (IOException e1) {
-                System.err.println("IOException: Cannot write image to file. " + e1.getMessage());
-            } catch (NotFoundException e2) {
-                System.err.println("NotFoundException: Unable to decode BinaryBitmap. " + e2);
-            }
+            System.err.println("NotFoundException: Unable to decode BinaryBitmap. " + e);
         }
-        int dashCount = StringUtils.countMatches(returnValue, "-");
-        if (dashCount != 4) {
-            // TODO: 10/2/18 Decoded QR does not match expected format
+        return returnValue;
+    }
+
+    private static String getQRText(BinaryBitmap bitmap) throws NotFoundException {
+        Map<DecodeHintType, Object>  hints = new EnumMap<>(DecodeHintType.class);
+        hints.put(DecodeHintType.TRY_HARDER, Boolean.TRUE);
+        BarcodeFormat[] formats = { BarcodeFormat.QR_CODE };
+        hints.put(DecodeHintType.POSSIBLE_FORMATS, Arrays.asList(formats));
+        Result result = new MultiFormatReader().decode(bitmap, hints);
+        return result.getText();
+    }
+
+    private static String decodeNormal(File qrCodeImage) {
+        String returnValue = "";
+        try {
+            BufferedImage bufferedQRCodeImage = getBufferedImage(qrCodeImage);
+            BinaryBitmap bitmap = getBinaryBitmap(bufferedQRCodeImage);
+            returnValue = getQRText(bitmap);
+        } catch (NotFoundException e) {
+            System.err.println("NotFoundException: Unable to decode BinaryBitmap. " + e);
         }
         return returnValue;
     }
@@ -155,7 +158,13 @@ public class QRDecoder {
                     if (imageFile.getName().contains(".png")) {
                         String row = file.getName().replace(".pdf", "") + DELIMITER
                                 + imageFile.getName().replace(".png", "") + DELIMITER;
-                        String decodedQRCode = decodeQRCode(imageFile);
+                        String decodedQRCode = decodeNormal(imageFile);
+                        if (decodedQRCode.isEmpty()) {
+                            decodedQRCode = decodeScaled(imageFile, FACTOR_HALF);
+                            if (decodedQRCode.isEmpty()) {
+                                decodedQRCode = decodeScaled(imageFile, FACTOR_DOUBLE);
+                            }
+                        }
                         System.out.println("Result: " + decodedQRCode);
                         csvRows.add(row + decodedQRCode);
                     }
