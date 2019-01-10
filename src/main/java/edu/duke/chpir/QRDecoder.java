@@ -7,6 +7,7 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPageTree;
 import org.apache.pdfbox.rendering.PDFRenderer;
 
+import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.FileWriter;
@@ -103,7 +104,7 @@ public class QRDecoder {
         for (File file : scanSource.listFiles()) {
             if (file.getName().contains(".pdf")) {
                 PDDocument pdDocument = getPDDocument(file.getAbsolutePath());
-                processPdDocument(file, pdDocument);
+                processPdDocument(file, pdDocument, outputFolder);
                 try {
                     pdDocument.close();
                 } catch (IOException e) {
@@ -118,13 +119,15 @@ public class QRDecoder {
         System.out.println("Number of seconds taken: " + timeTaken);
     }
 
-    private static void processPdDocument(File file, PDDocument pdDocument) {
+    private static void processPdDocument(File file, PDDocument pdDocument, String outputFolder) {
         PDPageTree pdPageTree = pdDocument.getPages();
         PDFRenderer pdfRenderer = new PDFRenderer(pdDocument);
         for (int k = 0; k < pdPageTree.getCount(); k++) {
-            String row = file.getName().replace(".pdf", "") + DELIMITER + (k + 1) + DELIMITER;
+            String baseName = file.getName().replace(".pdf", "");
+            String row = baseName + DELIMITER + (k + 1) + DELIMITER;
             try {
-                String decodedQRCode = decodeImage(pdfRenderer.renderImage(k));
+                BufferedImage image = pdfRenderer.renderImage(k);
+                String decodedQRCode = decodeImage(image);
                 int index = 0;
                 while (decodedQRCode.isEmpty() && index < FACTORS.length) {
                     decodedQRCode = decodeImage(pdfRenderer.renderImage(k, FACTORS[index]));
@@ -133,9 +136,26 @@ public class QRDecoder {
                 numberOfPages += 1;
                 System.out.println("Result: " + decodedQRCode);
                 csvRows.add(row + decodedQRCode);
+                if (!decodedQRCode.isEmpty()) {
+                    writeImage(outputFolder + "/" + baseName, image, decodedQRCode);
+                }
             } catch (IOException e) {
                 System.out.println("Unable to convert page to image: " + e);
             }
+        }
+    }
+
+    private static void writeImage(String outputFolder, BufferedImage image, String imageName) {
+        try {
+            File destinationFolder = new File(outputFolder);
+            if (!destinationFolder.exists()) {
+                destinationFolder.mkdir();
+                System.out.println("Created output folder: " + destinationFolder.getAbsolutePath());
+            }
+            File imageFile = new File(destinationFolder.getAbsolutePath() + "/" + imageName + ".png");
+            ImageIO.write(image, "png", imageFile);
+        } catch (Exception e) {
+            e.printStackTrace();
         }
     }
 
