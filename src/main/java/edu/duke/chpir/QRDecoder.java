@@ -3,6 +3,7 @@ package edu.duke.chpir;
 import com.google.zxing.*;
 import com.google.zxing.client.j2se.BufferedImageLuminanceSource;
 import com.google.zxing.common.HybridBinarizer;
+import com.google.zxing.multi.qrcode.QRCodeMultiReader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageTree;
@@ -35,22 +36,26 @@ public class QRDecoder {
         return new BinaryBitmap(new HybridBinarizer(source));
     }
 
-    private static String getQRText(BinaryBitmap bitmap) throws NotFoundException {
+    private static Result[] getQRResults(BinaryBitmap bitmap) throws NotFoundException {
         Map<DecodeHintType, Object> hints = new EnumMap<>(DecodeHintType.class);
         hints.put(DecodeHintType.TRY_HARDER, Boolean.TRUE);
         BarcodeFormat[] formats = {BarcodeFormat.QR_CODE};
         hints.put(DecodeHintType.POSSIBLE_FORMATS, Arrays.asList(formats));
-        Result result = new MultiFormatReader().decode(bitmap, hints);
-        return result.getText();
+        return new QRCodeMultiReader().decodeMultiple(bitmap, hints);
     }
 
-    private static String decodeImage(BufferedImage qrCodeImage) {
+    private static String[] decodeImage(BufferedImage qrCodeImage) {
         try {
             BinaryBitmap bitmap = getBinaryBitmap(qrCodeImage);
-            return getQRText(bitmap);
+            Result[] results = getQRResults(bitmap);
+            String[] qrs = new String[results.length];
+            for (int k = 0; k < results.length; k++) {
+                qrs[k] = results[k].getText();
+            }
+            return qrs;
         } catch (NotFoundException e) {
             System.err.println("NotFoundException: Unable to decode BinaryBitmap. " + e);
-            return "";
+            return null;
         }
     }
 
@@ -127,6 +132,16 @@ public class QRDecoder {
         }
     }
 
+    private static boolean isEmpty(String[] array) {
+        if (array == null) return true;
+        for (String s : array) {
+            if (s != null && !s.isEmpty()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private static void processPdDocument(File file, PDDocument pdDocument, String outputFolder) {
         PDPageTree pdPageTree = pdDocument.getPages();
         PDFRenderer pdfRenderer = new PDFRenderer(pdDocument);
@@ -136,13 +151,13 @@ public class QRDecoder {
             String row = baseName + DELIMITER + (k + 1) + DELIMITER;
             try {
                 BufferedImage image = pdfRenderer.renderImage(k);
-                String decodedQRCode = decodeImage(image);
+                String[] decodedQRCodes = decodeImage(image);
                 int index = 0;
-                while (decodedQRCode.isEmpty() && index < FACTORS.length) {
-                    decodedQRCode = decodeImage(pdfRenderer.renderImage(k, FACTORS[index]));
+                while ((decodedQRCodes == null || isEmpty(decodedQRCodes)) && index < FACTORS.length) {
+                    decodedQRCodes = decodeImage(pdfRenderer.renderImage(k, FACTORS[index]));
                     index += 1;
                 }
-                if (decodedQRCode.isEmpty()) {
+                if (isEmpty(decodedQRCodes)) {
                     int width = DIMENSION, height = DIMENSION, xOrigin = X, yOrigin = Y;
                     if (image.getWidth() < DIMENSION + X || image.getHeight() < DIMENSION + Y) {
                         width = image.getWidth();
@@ -151,22 +166,25 @@ public class QRDecoder {
                         yOrigin = 0;
                     }
                     BufferedImage croppedImage = image.getSubimage(xOrigin, yOrigin, width, height);
-                    decodedQRCode = decodeImage(croppedImage);
+                    decodedQRCodes = decodeImage(croppedImage);
                 }
                 numberOfPages += 1;
-                System.out.println("Result: " + decodedQRCode);
-                csvRows.add(row + decodedQRCode);
-                if (!decodedQRCode.isEmpty()) {
-                    int count = decodedQRCode.length() - decodedQRCode.replace("-", "").length();
-                    if (decodedQRCode.length() == 5) {
-                        //Write to CARDS folder
-                        writePage(outputFolder, "/CARDS/", "", pdPageTree.get(k), decodedQRCode);
-                    } else if (count == 2) {
-                        //Green folder
-                        writePage(outputFolder, "/GREEN/", "", pdPageTree.get(k), decodedQRCode);
-                    } else {
-                        //Write to IDs folder
-                        writePage(outputFolder, "/IDS/", decodedQRCode.substring(0, 8), pdPageTree.get(k), decodedQRCode);
+
+                if (!isEmpty(decodedQRCodes)) {
+                    for (String decodedQRCode : decodedQRCodes) {
+                        System.out.println("Result: " + decodedQRCode);
+                        csvRows.add(row + decodedQRCode);
+                        int count = decodedQRCode.length() - decodedQRCode.replace("-", "").length();
+                        if (decodedQRCode.length() == 5) {
+                            //Write to CARDS folder
+                            writePage(outputFolder, "/CARDS/", "", pdPageTree.get(k), decodedQRCode);
+                        } else if (count == 2) {
+                            //Green folder
+                            writePage(outputFolder, "/GREEN/", "", pdPageTree.get(k), decodedQRCode);
+                        } else {
+                            //Write to IDs folder
+                            writePage(outputFolder, "/IDS/", decodedQRCode.substring(0, 8), pdPageTree.get(k), decodedQRCode);
+                        }
                     }
                 } else {
                     //Write to NO_QR folder
