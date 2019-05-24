@@ -4,15 +4,17 @@ import com.google.zxing.*;
 import com.google.zxing.client.j2se.BufferedImageLuminanceSource;
 import com.google.zxing.common.HybridBinarizer;
 import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageTree;
 import org.apache.pdfbox.rendering.PDFRenderer;
 
-import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
@@ -67,11 +69,19 @@ public class QRDecoder {
         return pdDocument;
     }
 
-    private static void moveFileToProcessed(String destination, File file) {
+    private static void moveFileToProcessed(String destination, File file, String rootSource) {
         try {
-            File destinationFolder = new File(destination + "/PROCESSED/");
+            String parentFolder = file.getParent();
+            Path difference = Paths.get("");
+            if (parentFolder != null) {
+                Path rootPath = Paths.get(rootSource);
+                Path filePath = Paths.get(file.getParent());
+                difference = rootPath.relativize(filePath);
+            }
+
+            File destinationFolder = new File(destination + "/PROCESSED/" + difference);
             if (!destinationFolder.exists()) {
-                destinationFolder.mkdir();
+                Files.createDirectories(destinationFolder.toPath());
             }
             Files.move(file.toPath(), destinationFolder.toPath().resolve(file.toPath().getFileName()), REPLACE_EXISTING);
         } catch (Exception e) {
@@ -92,8 +102,19 @@ public class QRDecoder {
         }
 
         File scanSource = new File(scansFolder);
-        for (File file : scanSource.listFiles()) {
-            if (file.getName().contains(".pdf")) {
+        processFilesAndFolders(outputFolder, scanSource.listFiles(), scansFolder);
+        long endTime = System.nanoTime();
+        long timeTaken = TimeUnit.SECONDS.convert(endTime - startTime, TimeUnit.NANOSECONDS);
+        System.out.println("Number of pages processed: " + numberOfPages);
+        System.out.println("Number of seconds taken: " + timeTaken);
+    }
+
+    private static void processFilesAndFolders(String outputFolder, File[] scanFiles, String rootSource) {
+        for (File file : scanFiles) {
+            if (file.isDirectory()) {
+                System.out.println("Traverse sub-directory: " + file.getName());
+                processFilesAndFolders(outputFolder, file.listFiles(), rootSource);
+            } else if (file.getName().contains(".pdf")) {
                 PDDocument pdDocument = getPDDocument(file.getAbsolutePath());
                 processPdDocument(file, pdDocument, outputFolder);
                 try {
@@ -101,13 +122,9 @@ public class QRDecoder {
                 } catch (IOException e) {
                     System.out.println("Unable to close PDDocument");
                 }
-                moveFileToProcessed(outputFolder, file);
+                moveFileToProcessed(outputFolder, file, rootSource);
             }
         }
-        long endTime = System.nanoTime();
-        long timeTaken = TimeUnit.SECONDS.convert(endTime - startTime, TimeUnit.NANOSECONDS);
-        System.out.println("Number of pages processed: " + numberOfPages);
-        System.out.println("Number of seconds taken: " + timeTaken);
     }
 
     private static void processPdDocument(File file, PDDocument pdDocument, String outputFolder) {
@@ -140,19 +157,23 @@ public class QRDecoder {
                 System.out.println("Result: " + decodedQRCode);
                 csvRows.add(row + decodedQRCode);
                 if (!decodedQRCode.isEmpty()) {
+                    int count = decodedQRCode.length() - decodedQRCode.replace("-", "").length();
                     if (decodedQRCode.length() == 5) {
                         //Write to CARDS folder
-                        writeImage(outputFolder, "/CARDS/", "", image, decodedQRCode);
+                        writePage(outputFolder, "/CARDS/", "", pdPageTree.get(k), decodedQRCode);
+                    } else if (count == 2) {
+                        //Green folder
+                        writePage(outputFolder, "/GREEN/", "", pdPageTree.get(k), decodedQRCode);
                     } else {
                         //Write to IDs folder
-                        writeImage(outputFolder, "/IDS/", decodedQRCode.substring(0, 8), image, decodedQRCode);
+                        writePage(outputFolder, "/IDS/", decodedQRCode.substring(0, 8), pdPageTree.get(k), decodedQRCode);
                     }
                 } else {
                     //Write to NO_QR folder
-                    writeImage(outputFolder, "/NOQRS/", baseName, image, (k + 1) + "");
+                    writePage(outputFolder, "/NOQRS/", baseName, pdPageTree.get(k), (k + 1) + "");
                 }
             } catch (IOException e) {
-                System.out.println("Unable to convert page to image: " + e);
+                System.out.println("IOException: " + e);
             }
         }
         writeCSV(outputFolder + "/CSV/", baseName, csvRows);
@@ -185,14 +206,17 @@ public class QRDecoder {
         }
     }
 
-    private static void writeImage(String outputFolder, String subFolder1, String subFolder2, BufferedImage image, String imageName) {
+    private static void writePage(String outputFolder, String subFolder1, String subFolder2, PDPage page, String imageName) {
+        PDDocument document = new PDDocument();
+        document.addPage(page);
         try {
             File destinationFolder = new File(outputFolder + "/" + subFolder1 + "/" + subFolder2);
             if (!destinationFolder.exists()) {
                 destinationFolder.mkdirs();
             }
-            File imageFile = new File(destinationFolder.getAbsolutePath() + "/" + imageName + ".png");
-            ImageIO.write(image, "png", imageFile);
+            File pageFile = new File(destinationFolder.getAbsolutePath() + "/" + imageName + ".pdf");
+            document.save(pageFile);
+            document.close();
         } catch (Exception e) {
             e.printStackTrace();
         }
