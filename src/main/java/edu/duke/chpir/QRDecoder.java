@@ -9,6 +9,8 @@ import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageTree;
 import org.apache.pdfbox.rendering.PDFRenderer;
 
+import java.awt.geom.AffineTransform;
+import java.awt.image.AffineTransformOp;
 import java.awt.image.BufferedImage;
 import java.io.*;
 import java.nio.file.Files;
@@ -24,7 +26,8 @@ public class QRDecoder {
     private static final String DELIMITER = ",";
     private static final String SEPARATOR = "\n";
     private static final String HEADER = "PDF_Name,Page_Number,Decoded_ID";
-    private static final float[] FACTORS = {2.0f, 0.5f, 0.25f};
+    private static final float[] FACTORS = {3.0f, 2.0f, 0.5f, 0.25f};
+    private static final float[] RESOLUTIONS = {72.0f, 150.0f, 300.0f};
     private static final int DIMENSION = 200;
     private static final int X = 150;
     private static final int Y = 50;
@@ -173,21 +176,17 @@ public class QRDecoder {
             try {
                 BufferedImage image = pdfRenderer.renderImage(k);
                 String[] decodedQRCodes = decodeImage(image);
-                int index = 0;
-                while ((decodedQRCodes == null || isEmpty(decodedQRCodes)) && index < FACTORS.length) {
-                    decodedQRCodes = decodeImage(pdfRenderer.renderImage(k, FACTORS[index]));
-                    index += 1;
+                if (isEmpty(decodedQRCodes)) {
+                    decodedQRCodes = applyFactors(pdfRenderer, k);
                 }
                 if (isEmpty(decodedQRCodes)) {
-                    int width = DIMENSION, height = DIMENSION, xOrigin = X, yOrigin = Y;
-                    if (image.getWidth() < DIMENSION + X || image.getHeight() < DIMENSION + Y) {
-                        width = image.getWidth();
-                        height = image.getHeight();
-                        xOrigin = 0;
-                        yOrigin = 0;
-                    }
-                    BufferedImage croppedImage = image.getSubimage(xOrigin, yOrigin, width, height);
-                    decodedQRCodes = decodeImage(croppedImage);
+                    decodedQRCodes = applyResolutions(pdfRenderer, k);
+                }
+                if (isEmpty(decodedQRCodes)) {
+                    decodedQRCodes = applyCropping(image);
+                }
+                if (isEmpty(decodedQRCodes)) {
+                    decodedQRCodes = applyAffineTransform(image);
                 }
                 numberOfPages += 1;
 
@@ -218,6 +217,61 @@ public class QRDecoder {
             }
         }
         writeCSV(outputFolder + "/CSV/", baseName, csvRows);
+    }
+
+    private static String[] applyFactors(PDFRenderer pdfRenderer, int k) {
+        String[] decodedQRCodes = new String[0];
+        int index = 0;
+        while (isEmpty(decodedQRCodes) && index < FACTORS.length) {
+            try {
+                decodedQRCodes = decodeImage(pdfRenderer.renderImage(k, FACTORS[index]));
+            } catch (IOException e) {
+                System.err.println("IOException: " + e.getMessage());
+            }
+            index += 1;
+        }
+        return decodedQRCodes;
+    }
+
+    private static String[] applyResolutions(PDFRenderer pdfRenderer, int k) {
+        String[] decodedQRCodes = new String[0];
+        int index = 0;
+        while (isEmpty(decodedQRCodes) && index < RESOLUTIONS.length) {
+            try {
+                decodedQRCodes = decodeImage(pdfRenderer.renderImageWithDPI(k, RESOLUTIONS[index]));
+            } catch (IOException e) {
+                System.err.println("IOException: " + e.getMessage());
+            }
+            index += 1;
+        }
+        return decodedQRCodes;
+    }
+
+    private static String[] applyCropping(BufferedImage image) {
+        int width = DIMENSION, height = DIMENSION, xOrigin = X, yOrigin = Y;
+        if (image.getWidth() < DIMENSION + X || image.getHeight() < DIMENSION + Y) {
+            width = image.getWidth();
+            height = image.getHeight();
+            xOrigin = 0;
+            yOrigin = 0;
+        }
+        return decodeImage(image.getSubimage(xOrigin, yOrigin, width, height));
+    }
+
+    private static String[] applyAffineTransform(BufferedImage image) {
+        String[] decodedQRCodes = new String[0];
+        int index = 0;
+        while (isEmpty(decodedQRCodes) && index < FACTORS.length) {
+            int width = image.getWidth(), height = image.getHeight();
+            BufferedImage after = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+            AffineTransform affineTransform = new AffineTransform();
+            affineTransform.scale(FACTORS[index], FACTORS[index]);
+            AffineTransformOp scaleOp = new AffineTransformOp(affineTransform, AffineTransformOp.TYPE_BILINEAR);
+            after = scaleOp.filter(image, after);
+            decodedQRCodes = decodeImage(after);
+            index += 1;
+        }
+        return decodedQRCodes;
     }
 
     private static void writeCSV(String outputFolder, String filename, List<String> csvRows) {
