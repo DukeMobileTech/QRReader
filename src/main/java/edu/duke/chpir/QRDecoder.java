@@ -10,14 +10,13 @@ import org.apache.pdfbox.pdmodel.PDPageTree;
 import org.apache.pdfbox.rendering.PDFRenderer;
 
 import java.awt.image.BufferedImage;
-import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
+import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 
@@ -30,6 +29,7 @@ public class QRDecoder {
     private static final int X = 150;
     private static final int Y = 50;
     private static int numberOfPages = 0;
+    private static HashMap<String, String> rules;
 
     private static BinaryBitmap getBinaryBitmap(BufferedImage image) {
         LuminanceSource source = new BufferedImageLuminanceSource(image);
@@ -98,13 +98,17 @@ public class QRDecoder {
         long startTime = System.nanoTime();
         String scansFolder = "";
         String outputFolder = "";
-        if (args.length != 2) {
-            System.out.println("Incorrect number of arguments");
+        String rulesFolder = "";
+        if (args.length != 3) {
+            System.out.println("Incorrect number of arguments. Expected 3 but got " + args.length);
             System.exit(0);
         } else {
             scansFolder = args[0];
             outputFolder = args[1];
+            rulesFolder = args[2];
         }
+
+        setDestinationRules(rulesFolder);
 
         File scanSource = new File(scansFolder);
         processFilesAndFolders(outputFolder, scanSource.listFiles(), scansFolder);
@@ -112,6 +116,23 @@ public class QRDecoder {
         long timeTaken = TimeUnit.SECONDS.convert(endTime - startTime, TimeUnit.NANOSECONDS);
         System.out.println("Number of pages processed: " + numberOfPages);
         System.out.println("Number of seconds taken: " + timeTaken);
+    }
+
+    private static void setDestinationRules(String rulesFolder) {
+        rules = new HashMap<>();
+        BufferedReader reader;
+        try {
+            reader = new BufferedReader(new FileReader(rulesFolder));
+            String line = reader.readLine();
+            while (line != null) {
+                String[] rule = line.split("=");
+                rules.put(rule[0].trim(), rule[1].trim());
+                line = reader.readLine();
+            }
+            reader.close();
+        } catch (IOException e) {
+            System.err.println("IOException: " + e);
+        }
     }
 
     private static void processFilesAndFolders(String outputFolder, File[] scanFiles, String rootSource) {
@@ -174,21 +195,23 @@ public class QRDecoder {
                     for (String decodedQRCode : decodedQRCodes) {
                         System.out.println("Result: " + decodedQRCode);
                         csvRows.add(row + decodedQRCode);
-                        int count = decodedQRCode.length() - decodedQRCode.replace("-", "").length();
-                        if (decodedQRCode.length() == 5) {
-                            //Write to CARDS folder
-                            writePage(outputFolder, "/CARDS/", "", pdPageTree.get(k), decodedQRCode);
-                        } else if (count == 2) {
-                            //Green folder
-                            writePage(outputFolder, "/GREEN/", "", pdPageTree.get(k), decodedQRCode);
-                        } else {
-                            //Write to IDs folder
-                            writePage(outputFolder, "/IDS/", decodedQRCode.substring(0, 8), pdPageTree.get(k), decodedQRCode);
+                        String regex, folder, subfolder;
+                        regex = folder = subfolder = "";
+                        for (Map.Entry entry : rules.entrySet()) {
+                            regex = (String) entry.getKey();
+                            if (Pattern.matches(regex, decodedQRCode)) {
+                                folder = (String) entry.getValue();
+                                break;
+                            }
                         }
+                        if (regex.equals("^\\d{2}-\\d{3}-[A-Z]-.+$")) {
+                            subfolder = decodedQRCode.substring(0, 8);
+                        }
+                        writePage(outputFolder, "/" + folder + "/", subfolder, pdPageTree.get(k), decodedQRCode);
                     }
                 } else {
-                    //Write to NO_QR folder
-                    writePage(outputFolder, "/NOQRS/", baseName, pdPageTree.get(k), (k + 1) + "");
+                    String name = rules.get("^\"\"$");
+                    writePage(outputFolder, "/" + name + "/", baseName, pdPageTree.get(k), (k + 1) + "");
                 }
             } catch (IOException e) {
                 System.out.println("IOException: " + e);
